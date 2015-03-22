@@ -1,0 +1,4 @@
+# Apache will output logs here for debugging.
+
+*
+!/.gitignore
