@@ -12,7 +12,21 @@ void main()
 
 void handleRequest(Request request)
 {
-	request.write("Content-Type: text/plain\r\n");
+	request.write("Content-Type: text/html\r\n");
 	request.write("\r\n");
-	request.write("Here's a simple (F)CGI response!");
+	request.write("
+<html>
+<head>
+<title>Test Page</title>
+</head>
+<body>
+");
+	foreach (k, v; request.params)
+	{
+		request.write("<br>%s = %s".format(k,v));
+	}
+	request.write("
+</body>
+</html>
+");
 }
