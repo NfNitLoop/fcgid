@@ -1,0 +1,9 @@
+{
+	"name": "sample",
+	"description": "A sample application that uses the FastCGI library.",
+	"copyright": "Copyright © 2015, Cody Casterline",
+	"authors": ["Cody Casterline"],
+	"dependencies": {
+		"lib": { "path": "../lib" },
+	}
+}

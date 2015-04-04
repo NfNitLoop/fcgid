@@ -1,0 +1,6 @@
+{
+	"name": "lib",
+	"description": "FCGI Library in D",
+	"copyright": "Copyright © 2015, Cody Casterline",
+	"authors": ["Cody Casterline"],
+}

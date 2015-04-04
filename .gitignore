@@ -1,10 +1,14 @@
-/.vagrant
-/.dub
+# Ignore build/test tool stuff:
+.vagrant/
+.dub/
 /docs.json
 /__dummy.html
+
+# Ignore build targets:
+*.a
 *.o
 *.obj
 
 # What's this?: 
-/dub.userprefs
+dub.userprefs
 

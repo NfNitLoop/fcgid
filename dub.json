@@ -1,8 +1,11 @@
 {
 	"name": "fcgid",
-	"description": "A minimal D application.",
-	"copyright": "Copyright © 2015, codyc",
-	"authors": ["codyc"],
-	"dependencies": {
-	}
+	"description": "A pure D implementation of the FCGI application protocol.",
+	"copyright": "Copyright © 2015, Cody Casterline",
+	"authors": ["Cody Casterline"],
+	"targetType": "none",
+	"subPackages": [
+		"./lib",
+		"./sample"
+	]
 }

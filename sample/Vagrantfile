@@ -1,0 +1,27 @@
+
+# This file configures a Linux machine with Apache that will
+# listen at http://10.10.10.10:8080/fcgi and call the sample app.d.
+
+
+Vagrant.configure(2) do |config|
+  config.vm.box = "ubuntu/trusty64"
+
+  config.vm.box_check_update = false
+
+  config.vm.network "forwarded_port", guest: 80, host: 8080
+  config.vm.network "private_network", ip: "10.10.10.10"
+
+  config.vm.provider "virtualbox" do |vb|
+     vb.memory = "1024"
+  end
+
+
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.synced_folder "..", "/vagrant"
+
+  config.vm.provision "shell", inline: <<-SHELL
+    sudo /bin/bash /vagrant/sample/vagrant/provision
+  SHELL
+
+
+end
