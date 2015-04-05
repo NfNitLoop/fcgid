@@ -5,15 +5,22 @@
 cd $(dirname "$0")
 SCRIPTDIR=$(pwd)
 
+cat > /etc/apt/sources.list.d/multiverse.list <<EOF
+# Enable the "multiverse" repository.  mod_fastcgi is there. 
+deb http://archive.ubuntu.com/ubuntu trusty multiverse
+deb-src http://archive.ubuntu.com/ubuntu trusty multiverse
+deb http://archive.ubuntu.com/ubuntu trusty-updates multiverse
+deb-src http://archive.ubuntu.com/ubuntu trusty-updates multiverse
+EOF
 
 # Install dmd, dub, and mod-fcgid:
 # See: http://d-apt.sourceforge.net/
 wget http://master.dl.sourceforge.net/project/d-apt/files/d-apt.list -O /etc/apt/sources.list.d/d-apt.list
-apt-get update
+apt-get update -q
 apt-get -y --allow-unauthenticated install --reinstall d-apt-keyring
 # Is this strictly necessary?
-apt-get update
-apt-get install -y dmd-bin dub apache2 libapache2-mod-fcgid
+apt-get update -q
+apt-get install -y dmd-bin dub apache2 libapache2-mod-fastcgi
 
 # Try to build the sample application: 
 su vagrant -c "/bin/bash ./redeploy_sample"
