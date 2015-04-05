@@ -4,10 +4,14 @@
 
 cd $(dirname "$0")
 SCRIPTDIR=$(pwd)
+
+# Overwrite the default apache config w/ ours: 
+sudo cp ./000-default.conf /etc/apache2/sites-available/
+
 cd ..
 APPDIR=$(pwd)
-
 dub build || echo "ERROR: Couldn't build the sample app!? File a GitHub issue w/ above errors!"
+
 sudo service apache2 restart
 
 echo "If all went well, visit:  http://localhost:8080/fcgi"
