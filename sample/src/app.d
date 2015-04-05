@@ -1,7 +1,7 @@
 #!/usr/bin/env rdmd
 
 /** Sampe application that uses fcgid. */
-import nfnitloop.fcgid.provider;
+import nfnitloop.fcgid.application;
 import std.string;
 
 void main()

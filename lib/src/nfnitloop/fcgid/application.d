@@ -1,4 +1,4 @@
-module nfnitloop.fcgid.provider;
+module nfnitloop.fcgid.application;
 
 import std.socket;
 import std.string: format;
