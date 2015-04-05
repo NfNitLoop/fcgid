@@ -78,7 +78,13 @@ class Request
 	// TODO: Provide .writeHeaders(string[string]) helper.
 
 	/** (F)CGI web parameters like REQUEST_SCHEME, REQUEST_URI, etc. */
-	@property const(string[string]) params() const { return _params; }
+	@property const(string[string]) fcgiParams() const { return _fcgi_params; }
+
+	/// Parsed QUERY_STRING as key/value pairs:
+	@property const(string[string]) queryParams() const { return _query_params; }
+
+
+
 
 	void write(const(char)[] data) // TODO: Char? ubyte? Both?
 	{
@@ -91,7 +97,9 @@ private:
 	const Record beginRecord;
 
 	ubyte[] _params_data;
-	string[string] _params; // Parsed version of params.
+	string[string] _fcgi_params; // Parsed version of params.
+	string[string] _query_params; // parsed QUERY_STRING params.
+	string[][string] _query_params_multi; // same, with possible multiple values.
 
 	this(int id, SocketHandler handler, const Record beginRecord) 
 	{
@@ -102,15 +110,66 @@ private:
 
 	void handle(const Record record)
 	{
-		if (record.type == RecordType.FCGI_PARAMS)
+		final switch(record.type)
 		{
-			if (!record.endOfStream) {
-				_params_data ~= record.content;
-			} else {
-				_params = _params_data.fcgiParams;
-				debugMsg("Got params: %s".format(_params));
-			}
+			case RecordType.FCGI_PARAMS:
+				if (!record.endOfStream) { _params_data ~= record.content; }
+				else { calcParams(); }
+			break;
+			
+			case RecordType.FCGI_STDIN:
+				// TODO: Send & cache stdin somewhere.
+			break;
+
+			case RecordType.FCGI_END_REQUEST:
+			case RecordType.FCGI_ABORT_REQUEST:
+				// TODO: Move handling of closing to here.
+			break;
+
+			case RecordType.FCGI_DATA:
+				// This might be used by other request roles in the future?
+			case RecordType.FCGI_BEGIN_REQUEST:
+			case RecordType.FCGI_STDOUT:
+			case RecordType.FCGI_STDERR:
+			case RecordType.FCGI_GET_VALUES:
+			case RecordType.FCGI_GET_VALUES_RESULT:
+			case RecordType.FCGI_UNKNOWN_TYPE:
+
+				// TODO: These types shouldn't happen here.
+				// Send an error message to the server.
+			break;
+
 		}
+
+	}
+
+	void calcParams()
+	{
+		import std.algorithm: findSplit;
+		import std.algorithm: splitter;
+		import std.uri: decodeComponent;
+		import std.string: empty;
+
+		// Parse the FCGI parameters:
+		_fcgi_params = _params_data.fcgiParams;
+		debugMsg("Got params: %s".format(_fcgi_params));
+
+		// Parse QUERY_STRING parameters in 2 ways:
+		// _query_params: key/value
+		// _query_params_multi: key/value[]
+		auto query = fcgiParams.get("QUERY_STRING", "");
+
+		foreach(keyValue; query.splitter("&"))
+		{
+			auto split = keyValue.findSplit("=");
+			if (split[0].empty) continue;
+			auto key = split[0].decodeComponent;
+			auto value = split[2].decodeComponent;
+			_query_params[key] = value;
+			if (key in _query_params_multi) { _query_params_multi[key] ~= value; }
+			else { _query_params_multi[key] = [value]; }
+		}
+		
 	}
 
 	/// Should we close the socket after this request? 
@@ -232,6 +291,9 @@ class SocketHandler
 
 	void closeRequest(Request req, uint appStatus)
 	{
+
+		// TODO: " When a role protocol calls for transmitting a stream other than FCGI_STDERR, at least one record of the stream type is always transmitted, even if the stream is empty. "
+
 		// Send close request
 		FCGI_EndRequestBody erb;
 		erb.protocolStatus = EndRequestStatus.FCGI_REQUEST_COMPLETE;
@@ -332,7 +394,7 @@ struct FCGI_Record_Header
 	
 	string toString() const
 	{
-		auto typeEnum = get(type, RecordType.FCGI_UNKNOWN_TYPE);
+		auto typeEnum = getEnum(type, RecordType.FCGI_UNKNOWN_TYPE);
 
 		return "FCGI_Record_Header(version: %s, type: %s, requestId: %s, contentLength: %s, paddingLength: %s)"
 		.format(ver, typeEnum, requestId, contentLength, paddingLength);
@@ -371,7 +433,7 @@ struct FCGI_BeginRequestBody
 
 	@property RequestRole role()
 	{
-		return get(roleB0, RequestRole.UNKNOWN_);
+		return getEnum(roleB0, RequestRole.UNKNOWN_);
 	} 
 
 	@property bool keepConnection()
@@ -475,7 +537,7 @@ class Record
 		return content.length == 0;
 	}
 
-	@property RecordType type() const { return get(_header.type, RecordType.FCGI_UNKNOWN_TYPE); }
+	@property RecordType type() const { return getEnum(_header.type, RecordType.FCGI_UNKNOWN_TYPE); }
 
 	@property FCGI_BeginRequestBody beginRequestBody() const
 	{
@@ -526,7 +588,7 @@ enum EndRequestStatus
 }
 
 
-E get(E, V)(V value, E defaultEnum) if (is(E == enum))
+E getEnum(E, V)(V value, E defaultEnum) if (is(E == enum))
 {
 	import std.traits: EnumMembers;
 
@@ -592,6 +654,9 @@ string popParamString(ref const(ubyte)[] content, uint length)
 	content = content[length..$];
 	return value;
 }
+
+
+
 
 // The socket we expect to be open for us to receive connections on:
  enum FCGI_LISTENSOCK_FILENO = 0;
