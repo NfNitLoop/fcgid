@@ -20,7 +20,9 @@ apt-get update -q
 apt-get -y --allow-unauthenticated install --reinstall d-apt-keyring
 # Is this strictly necessary?
 apt-get update -q
-apt-get install -y dmd-bin dub apache2 libapache2-mod-fastcgi
+
+# Lock down dmd & dub versions. Dub currently broken w/ dmd 2067. :( 
+apt-get install -y dmd-bin=2.066.1-0 libphobos2-dev=2.066.1-0 dub=0.9.22-0 apache2 libapache2-mod-fastcgi
 
 # Try to build the sample application: 
 su vagrant -c "/bin/bash ./redeploy_sample"

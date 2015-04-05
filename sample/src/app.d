@@ -2,6 +2,7 @@
 
 /** Sampe application that uses fcgid. */
 import nfnitloop.fcgid.provider;
+import std.string;
 
 void main()
 {
@@ -12,6 +13,7 @@ void main()
 void handleRequest(Request request)
 {
 	maybeSleep(request);
+
 	request.write("Content-Type: text/html\r\n");
 	request.write("\r\n");
 	request.write("
@@ -28,10 +30,13 @@ void handleRequest(Request request)
 	{
 		request.write("\n<br>Query param: %s = %s".format(k,v));
 	}
+
+	request.write("<pre>");
 	foreach (k, v; request.fcgiParams)
 	{
-		request.write("\n<br>%s = %s".format(k,v));
+		request.write("\n%s = %s".format(k.rightJustify(22),v.quote()));
 	}
+	request.write("</pre>");
 	request.write("
 </body>
 </html>
@@ -81,3 +86,9 @@ void maybeSleep(Request req)
 	catch (ConvException) { /* That wasn't an int. */ }
 }
 
+// Hacky. Quote for HTML.
+string quote(string s)
+{
+	import std.array: replace;
+	return s.replace("<", "&lt;");
+}
