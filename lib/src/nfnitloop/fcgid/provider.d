@@ -1,14 +1,7 @@
 module nfnitloop.fcgid.provider;
 
-import std.algorithm: any;
-import std.concurrency: spawn;
-import std.conv: to;
-import std.process: environment;
-import std.range: chunks;
-import std.regex: split, regex;
 import std.socket;
 import std.string: format;
-import std.traits: EnumMembers;
 
 /** 
  * Implements the web-application side of the FastCGI protocol. 
@@ -26,6 +19,9 @@ class FastCGI
 
 	this()
 	{
+		import std.process: environment;
+		import std.regex: split, regex;
+
 		string addrs = environment.get("FCGI_WEB_SERVER_ADDRS", "");
 		if (addrs.length > 0) { 
 			fcgi_web_server_addrs = addrs.split(regex(",")).idup;
@@ -44,6 +40,8 @@ class FastCGI
 			debugMsg(msg);
 			enforce(false, msg);
 		} 
+
+		import std.concurrency: spawn;
 		while(true) 
 		{
 			Socket newSock = sock.accept();
@@ -63,7 +61,8 @@ class FastCGI
 		
 		// Server has not limited connections!?
 		if (fcgi_web_server_addrs.length == 0) return true;
-		// 
+
+		import std.algorithm: any;
 		return fcgi_web_server_addrs.any!(x => x==addr);
 	}
 }
@@ -75,6 +74,8 @@ alias Callback = void function(Request);
 /** (F)CGI request interface! */
 class Request 
 {
+	// TODO: Provide stdout and stderr. 
+	// TODO: Provide .writeHeaders(string[string]) helper.
 
 	/** (F)CGI web parameters like REQUEST_SCHEME, REQUEST_URI, etc. */
 	@property const(string[string]) params() const { return _params; }
@@ -87,14 +88,16 @@ class Request
 private: 
 	int id;
 	SocketHandler handler;
+	const Record beginRecord;
 
 	ubyte[] _params_data;
 	string[string] _params; // Parsed version of params.
 
-	this(int id, SocketHandler handler) 
+	this(int id, SocketHandler handler, const Record beginRecord) 
 	{
 		this.id = id;
 		this.handler = handler;
+		this.beginRecord = beginRecord;
 	}
 
 	void handle(const Record record)
@@ -108,6 +111,12 @@ private:
 				debugMsg("Got params: %s".format(_params));
 			}
 		}
+	}
+
+	/// Should we close the socket after this request? 
+	bool keepConnection() const
+	{
+		return beginRecord.beginRequestBody.keepConnection;
 	}
 }
 
@@ -144,7 +153,7 @@ class SocketHandler
 		scope(exit) sock.close();
 
 		FCGI_Record_Header header;
-		while (true)
+		while (sock.isAlive)
 		{
 			sock.fill(header.memory);
 
@@ -169,10 +178,11 @@ class SocketHandler
 		{
 			if (requestId in requests)
 			{
+				// TODO: Send FCGI error.
 				debugMsg("ERROR: Request # %s is already started!?".format(requestId));
 				return;
 			}
-			requests[requestId] = new Request(requestId, this);
+			requests[requestId] = new Request(requestId, this, record);
 			return;
 		}
 
@@ -189,10 +199,7 @@ class SocketHandler
 			if (record.type == RecordType.FCGI_STDIN && record.endOfStream)
 			{
 				callback(request);  // todo: try/catch.
-				// TODO: Are these necessary if we close the request? 
-				// closeStream(request, RecordType.FCGI_STDOUT);
-				// closeStream(request, RecordType.FCGI_STDERR);
-				closeRequest(request, 0); // TODO: non-zero for errors.
+				closeRequest(request, 0); // TODO: non-zero for errors?
 
 				return;
 			}
@@ -203,13 +210,14 @@ class SocketHandler
 
 	void stdout(Request request, const(ubyte)[] chars)
 	{
+		import std.range: chunks;
+
 		// Protect against writing too many or too few (0) bytes:
 		foreach(chunk; chars.chunks(0xffff))
 		{
 			auto header = FCGI_Record_Header.make(request, RecordType.FCGI_STDOUT, chunk);
 			sock.write(header.memory);
 			sock.write(chunk);
-			debugMsg("Writing request: " ~ cast(const(char)[]) chars);
 		}
 
 	}
@@ -224,7 +232,7 @@ class SocketHandler
 
 	void closeRequest(Request req, uint appStatus)
 	{
-		// TODO: Send close request
+		// Send close request
 		FCGI_EndRequestBody erb;
 		erb.protocolStatus = EndRequestStatus.FCGI_REQUEST_COMPLETE;
 		erb.appStatus = appStatus;
@@ -234,8 +242,12 @@ class SocketHandler
 		sock.write(header.memory);
 		sock.write(erb.memory);
 
-		// TODO: Close the connection if we're supposed to. 
 		requests.remove(req.id);
+		if (!req.keepConnection)
+		{
+			sock.shutdown(SocketShutdown.BOTH);
+			sock.close();
+		}
 	}
 }
 
@@ -516,6 +528,8 @@ enum EndRequestStatus
 
 E get(E, V)(V value, E defaultEnum) if (is(E == enum))
 {
+	import std.traits: EnumMembers;
+
 	foreach(e; EnumMembers!E)
 	{
 		if (e == value) return e;
