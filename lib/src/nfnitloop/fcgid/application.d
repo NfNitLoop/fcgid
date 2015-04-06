@@ -2,6 +2,7 @@ module nfnitloop.fcgid.application;
 
 import std.socket;
 import std.string: format;
+import std.conv;
 
 /** 
  * Implements the web-application side of the FastCGI protocol. 
@@ -13,10 +14,6 @@ import std.string: format;
 class FastCGI
 {
 
-	// A list of hosts from which we will accept connections:
-	// See: 3.2: Accepting Transport Connections
-	private immutable (string[]) fcgi_web_server_addrs;
-
 	this()
 	{
 		import std.process: environment;
@@ -26,36 +23,40 @@ class FastCGI
 		if (addrs.length > 0) { 
 			fcgi_web_server_addrs = addrs.split(regex(",")).idup;
 		}
+
+		try { debugLevel = environment.get("FCGI_DEBUG_LEVEL", "0").to!int; }
+		catch (ConvException e) { debugLevel = 0; }
 	}
 
-	/**
-	 * Call run() with a Callback to process reqeusts from the web server.
-	 */
+	/// Call run() with a Callback to process reqeusts from the web server.
 	void run(Callback callback)
 	{
 		Socket sock = new Socket(cast(socket_t) FCGI_LISTENSOCK_FILENO, AddressFamily.INET);
-		if (!sock.isAlive()) 
+		if (!sock.isAlive) 
 		{
-			auto msg = "Expected a listening socket on file handle 0.";
-			debugMsg(msg);
-			enforce(false, msg);
-		} 
+			import std.stdio;
+			writeln("FCGI expected a listening socket on file handle 0.");
+			return;
+		}
 
 		import std.concurrency: spawn;
-		while(true) 
+		while(sock.isAlive) 
 		{
 			Socket newSock = sock.accept();
  			if (!sourceOK(newSock)) { newSock.close(); continue; }
- 			// TODO: Check thread limit?
- 			spawn(&SocketHandler.spawn, newSock.releaseOwnership(), callback);
-		}
+ 			spawn(&SocketHandler.spawn, newSock.releaseOwnership(), callback, debugLevel);
+		} 
 	}
 
-	
+private:
+	// A list of hosts from which we will accept connections:
+	// See: 3.2: Accepting Transport Connections
+	private immutable (string[]) fcgi_web_server_addrs;
+	private int debugLevel = 0;
 
 	// See: 3.2: Accepting Transport Connections
 	// These must come from one of the hosts that were provided to us.
-	private bool sourceOK(Socket sock)
+	bool sourceOK(Socket sock)
 	{
 		auto addr = sock.remoteAddress.toHostNameString;
 		
@@ -73,28 +74,43 @@ alias Callback = void function(Request);
 
 /** (F)CGI request interface! */
 class Request 
-{
-	// TODO: Provide stdout and stderr. 
-	// TODO: Provide .writeHeaders(string[string]) helper.
-
-	/** (F)CGI web parameters like REQUEST_SCHEME, REQUEST_URI, etc. */
+{ 
+	/// (F)CGI web parameters like REQUEST_SCHEME, REQUEST_URI, etc.
 	@property const(string[string]) fcgiParams() const { return _fcgi_params; }
 
 	/// Parsed QUERY_STRING as key/value pairs:
 	@property const(string[string]) queryParams() const { return _query_params; }
 
+	/// Parsed QUERY_STRING containing a list of values for each key.
+	@property const(string[][string]) queryParamsMulti() const { return _query_params_multi; }
 
+	/// Represents standard output to FCGI (and the web browser.)
+	/// Write your web headers and data here.
+	@property OutputStream stdout() { return _stdout; }
 
+	/// FCGI STDERR. Write messages here to display them in the web server's error log.
+	@property OutputStream stderr() { return _stderr; }
 
-	void write(const(char)[] data) // TODO: Char? ubyte? Both?
+	/// Helper function to write HTTP headers. 
+	/// This is the same as calling request.stdout.write("Header: value\r\nHeader2: value2\r\n\r\n") for yourself.
+	/// Note: This assumes it writes all the headers and appends a blank \r\n, so that the
+	/// next thing sent to stdout begins your response.
+	void writeHeaders(in string[string] headers)
 	{
-		handler.stdout(this, cast(ubyte[]) data);
-	}
+		foreach (header, value; headers)
+		{
+			// TODO: Check that headers don't include newlines. Throw?
+			_stdout.write("%s: %s\r\n".format(header, value));
+		}
+		_stdout.write("\r\n");
+	}		
 
 private: 
-	int id;
+	ushort id;
 	SocketHandler handler;
 	const Record beginRecord;
+	OutputStream _stdout;
+	OutputStream _stderr;
 
 	ubyte[] _params_data;
 	string[string] _fcgi_params; // Parsed version of params.
@@ -103,9 +119,11 @@ private:
 
 	this(int id, SocketHandler handler, const Record beginRecord) 
 	{
-		this.id = id;
+		this.id = cast(ushort) id;
 		this.handler = handler;
 		this.beginRecord = beginRecord;
+		_stdout = new OutImpl(this.id, RecordType.FCGI_STDOUT, handler);
+		_stderr = new OutImpl(this.id, RecordType.FCGI_STDERR, handler);
 	}
 
 	void handle(const Record record)
@@ -179,6 +197,19 @@ private:
 	}
 }
 
+/// allows writing to FCGI stdout / stderr. 
+interface OutputStream
+{
+	alias ConstString = const(char)[];
+	/// out.write(some, values, like, so);
+	void write(ConstString[] messages ...);
+
+	/// Like write() but appends a newline ('\n')
+	void writeln(ConstString[] messages ...);
+
+	void write(const(ubyte)[] data);
+}
+
 
 private: /////////////////////////////////////////////////////////////////
 
@@ -187,27 +218,28 @@ private: /////////////////////////////////////////////////////////////////
 class SocketHandler
 {
 	/** Call with spawn() to spin up a new thread.  This function will assume ownership of sharedSocket. */
-	static void spawn(shared(Socket) sharedSocket, Callback callback)
+	static void spawn(shared(Socket) sharedSocket, Callback callback, int debugLevel)
 	{
 		auto socket = sharedSocket.takeOwnership();
-		auto handler = new SocketHandler(socket, callback);
+		auto handler = new SocketHandler(socket, callback, debugLevel);
 		handler.run();
+	}
+
+	this(Socket sock, Callback cb, int debugLevel)
+	{
+		this.sock = sock;
+		callback = cb;
+		this.debugLevel = debugLevel;
 	}
 
 	Socket sock;
 	Callback callback;
-
-	this(Socket sock, Callback cb)
-	{
-		this.sock = sock;
-		callback = cb;
-	}
-
+	int debugLevel;
 	Request[int] requests;
 
 	void run()
 	{
-		debugMsg("SocketHandler.handle()");
+		writeDebug("SocketHandler.handle()");
 		scope(exit) debugMsg("/SocketHandler.handle()");
 		scope(exit) sock.close();
 
@@ -267,25 +299,40 @@ class SocketHandler
 		}
 	}
 
-	void stdout(Request request, const(ubyte)[] chars)
+	void write(RecordType rt, ushort requestId, const(char)[] data)
+	{
+		// Cast to ubytes. Sock is a binary stream. This will let us use range w/o weird string-y behavior. 
+		write(rt, requestId, cast(const(ubyte)[]) data);
+	}
+
+	void write(RecordType rt, ushort requestId, const(ubyte)[] data)
 	{
 		import std.range: chunks;
 
 		// Protect against writing too many or too few (0) bytes:
-		foreach(chunk; chars.chunks(0xffff))
+		foreach(chunk; data.chunks(0xffff))
 		{
-			auto header = FCGI_Record_Header.make(request, RecordType.FCGI_STDOUT, chunk);
+			auto header = FCGI_Record_Header.make(requestId, rt, chunk);
 			sock.write(header.memory);
 			sock.write(chunk);
 		}
+	}
 
+	void writeDebug(const(char)[] data, int requestId = 0, int debugLevel = 1)
+	{
+		if (this.debugLevel < debugLevel) { return; }
+		alias stderr = RecordType.FCGI_STDERR;
+		ushort id = cast(ushort) requestId;
+		write(stderr, id, "DEBUG: ");
+		write(stderr, id, data); 
+		write(stderr, id, "\n");
 	}
 
 	void closeStream(Request req, RecordType type)
 	{
 		// Send 0 bytes to close a stream.
-		ubyte[] none;
-		auto header = FCGI_Record_Header.make(req, type, none);
+		ubyte[] noData;
+		auto header = FCGI_Record_Header.make(req.id, type, noData);
 		sock.write(header.memory);
 	}
 
@@ -300,7 +347,7 @@ class SocketHandler
 		erb.appStatus = appStatus;
 
 
-		auto header = FCGI_Record_Header.make(req, RecordType.FCGI_END_REQUEST, erb.memory);
+		auto header = FCGI_Record_Header.make(req.id, RecordType.FCGI_END_REQUEST, erb.memory);
 		sock.write(header.memory);
 		sock.write(erb.memory);
 
@@ -310,6 +357,36 @@ class SocketHandler
 			sock.shutdown(SocketShutdown.BOTH);
 			sock.close();
 		}
+	}
+}
+
+class OutImpl : OutputStream
+{
+	this(ushort requestId, RecordType recordType, SocketHandler socketHandler)
+	{
+		this.requestId = requestId;
+		this.recordType = recordType;
+		this.socketHandler = socketHandler;
+	}
+
+	ushort requestId;
+	RecordType recordType;
+	SocketHandler socketHandler;
+
+	void write(const(char)[][] messages ...)
+	{
+		foreach(message; messages) { write(cast(const(ubyte)[]) message); }
+	}
+
+	void writeln(const(char)[][] messages ...)
+	{
+		foreach(message; messages) { write(message); }
+		write("\n");
+	}
+
+	void write(const(ubyte)[] data)
+	{
+		socketHandler.write(recordType, requestId, data);
 	}
 }
 
@@ -403,14 +480,14 @@ struct FCGI_Record_Header
 	/** Construct a record to send data for a given request, recordtype, and data. 
 	  * Data length may not exceed 2^16 bytes. (64KiB)
 	  */
-	static FCGI_Record_Header make(T)(Request request, RecordType type, const(T)[] data)
+	static FCGI_Record_Header make(T)(int requestId, RecordType type, const(T)[] data)
 	{
 		auto buf = cast(void[]) data;
 		assert(buf.length < 0x10000);
 
 
 		FCGI_Record_Header header;
-		header.requestId = request.id;
+		header.requestId = requestId;
 		header.ver = 1;
 		header.type = cast(ubyte) type;
 

@@ -13,10 +13,12 @@ void main()
 void handleRequest(Request request)
 {
 	maybeSleep(request);
-
-	request.write("Content-Type: text/html\r\n");
-	request.write("\r\n");
-	request.write("
+	request.writeHeaders([
+		"Content-Type": "text/html; charset=utf-8",
+		"X-Served-By": "nfnitloop.fcgid.application"
+	]);
+	auto stdout = request.stdout;
+	stdout.write("
 <html>
 <head>
 <title>Test Page</title>
@@ -24,20 +26,21 @@ void handleRequest(Request request)
 <body>
 ");
 
-	request.write("<p>This is request #%s.</p>".format(getCount()));
+	stdout.writeln("<p>This is request #%s.</p>".format(getCount()));
 
-	foreach (k, v; request.queryParams)
+	foreach (param, values; request.queryParamsMulti)
 	{
-		request.write("\n<br>Query param: %s = %s".format(k,v));
+		if (values.length == 1) { stdout.writeln("<br>Query param: %s = %s".format(param,values[0])); }
+		else { stdout.writeln("<br>Query param: %s = %s".format(param, values)); }
 	}
 
-	request.write("<pre>");
+	stdout.write("<pre>");
 	foreach (k, v; request.fcgiParams)
 	{
-		request.write("\n%s = %s".format(k.rightJustify(22),v.quote()));
+		stdout.writeln("%s = %s".format(k.rightJustify(22),v.quote()));
 	}
-	request.write("</pre>");
-	request.write("
+	stdout.writeln("</pre>");
+	stdout.write("
 </body>
 </html>
 ");
@@ -53,7 +56,9 @@ void counter()
 {
 	uint count = 0;
 	void handleRequests(Tid requester) { requester.send(++count); }
-	while (true) { receive(&handleRequests); }
+	bool running = true;
+	void shutdown(OwnerTerminated ot) { running = false; }
+	while (running) { receive(&handleRequests, &shutdown); }
 }
 
 immutable string countThread = "counter";
