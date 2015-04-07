@@ -170,7 +170,7 @@ private:
 
 		// Parse the FCGI parameters:
 		_fcgi_params = _params_data.fcgiParams;
-		debugMsg("Got params: %s".format(_fcgi_params));
+		handler.writeDebug(1, "Got params: %s".format(_fcgi_params));
 
 		// Parse QUERY_STRING parameters in 2 ways:
 		// _query_params: key/value
@@ -239,8 +239,7 @@ class SocketHandler
 
 	void run()
 	{
-		writeDebug("SocketHandler.handle()");
-		scope(exit) debugMsg("/SocketHandler.handle()");
+		writeDebug(5, "Begin SocketHandler.handle()");
 		scope(exit) sock.close();
 
 		FCGI_Record_Header header;
@@ -250,13 +249,13 @@ class SocketHandler
 
 			if (header.ver != 1) 
 			{
-				debugMsg("Skipping record with version %s: %s".format(header.ver, header));
+				writeDebug(1, "Skipping record with version %s: %s".format(header.ver, header));
 				continue;
 				// TODO: Need to drain that record from the socket anyway.
 			}
 
 			auto record = Record.read(header, sock);
-			debugMsg("Got record: %s".format(record));
+			writeDebug(2, "Got record: %s".format(record));
 			routeRecord(record);
 		}
 	}
@@ -270,7 +269,7 @@ class SocketHandler
 			if (requestId in requests)
 			{
 				// TODO: Send FCGI error.
-				debugMsg("ERROR: Request # %s is already started!?".format(requestId));
+				writeDebug(0, "ERROR: Request # %s is already started!?".format(requestId));
 				return;
 			}
 			requests[requestId] = new Request(requestId, this, record);
@@ -318,7 +317,7 @@ class SocketHandler
 		}
 	}
 
-	void writeDebug(const(char)[] data, int requestId = 0, int debugLevel = 1)
+	void writeDebug(int debugLevel, lazy const(char)[] data, int requestId = 0)
 	{
 		if (this.debugLevel < debugLevel) { return; }
 		alias stderr = RecordType.FCGI_STDERR;
@@ -432,15 +431,6 @@ void[] memory(T)(ref T thing)
 	return cast(void[]) (&thing)[0..1];
 }
 
-void debugMsg(lazy const(char)[] msg)
-{
-	import std.stdio;
-	auto f = new File("/tmp/app.d.log", "a");
-	scope(exit) f.close();
-
-	f.writeln(msg);
-}
-
 // See: 3.3: Records
 struct FCGI_Record_Header
 {
@@ -457,7 +447,6 @@ struct FCGI_Record_Header
 	// 16-bit content length:
 	ubyte contentLengthB1;
 	ubyte contentLengthB0;
-
 
 	ubyte paddingLength;
 	ubyte reserved;
@@ -731,9 +720,6 @@ string popParamString(ref const(ubyte)[] content, uint length)
 	content = content[length..$];
 	return value;
 }
-
-
-
 
 // The socket we expect to be open for us to receive connections on:
  enum FCGI_LISTENSOCK_FILENO = 0;
