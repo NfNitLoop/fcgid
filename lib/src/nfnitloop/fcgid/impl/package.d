@@ -29,7 +29,7 @@ class SocketHandler
 	Socket sock;
 	Callback callback;
 	int debugLevel;
-	Request[int] requests;
+	RequestImpl[int] requests;
 	
 	void run()
 	{
@@ -66,7 +66,7 @@ class SocketHandler
 				writeDebug(0, "ERROR: Request # %s is already started!?".format(requestId));
 				return;
 			}
-			requests[requestId] = new Request(requestId, this, record);
+			requests[requestId] = new RequestImpl(requestId, this, record);
 			return;
 		}
 		
@@ -121,7 +121,7 @@ class SocketHandler
 		write(stderr, id, "\n");
 	}
 	
-	void closeStream(Request req, RecordType type)
+	void closeStream(RequestImpl req, RecordType type)
 	{
 		// Send 0 bytes to close a stream.
 		ubyte[] noData;
@@ -129,7 +129,7 @@ class SocketHandler
 		sock.write(header.memory);
 	}
 	
-	void closeRequest(Request req, uint appStatus)
+	void closeRequest(RequestImpl req, uint appStatus)
 	{
 		
 		// TODO: " When a role protocol calls for transmitting a stream other than FCGI_STDERR, at least one record of the stream type is always transmitted, even if the stream is empty. "
@@ -150,6 +150,128 @@ class SocketHandler
 			sock.shutdown(SocketShutdown.BOTH);
 			sock.close();
 		}
+	}
+}
+
+class RequestImpl : Request
+{ 
+	/// (F)CGI web parameters like REQUEST_SCHEME, REQUEST_URI, etc.
+	@property const(string[string]) fcgiParams() const { return _fcgi_params; }
+	
+	/// Parsed QUERY_STRING as key/value pairs:
+	@property const(string[string]) queryParams() const { return _query_params; }
+	
+	/// Parsed QUERY_STRING containing a list of values for each key.
+	@property const(string[][string]) queryParamsMulti() const { return _query_params_multi; }
+	
+	/// Represents standard output to FCGI (and the web browser.)
+	/// Write your web headers and data here.
+	@property OutputStream stdout() { return _stdout; }
+	
+	/// FCGI STDERR. Write messages here to display them in the web server's error log.
+	@property OutputStream stderr() { return _stderr; }
+	
+	/// Helper function to write HTTP headers. 
+	/// This is the same as calling request.stdout.write("Header: value\r\nHeader2: value2\r\n\r\n") for yourself.
+	/// Note: This assumes it writes all the headers and appends a blank \r\n, so that the
+	/// next thing sent to stdout begins your response.
+	void writeHeaders(in string[string] headers)
+	{
+		foreach (header, value; headers)
+		{
+			// TODO: Check that headers don't include newlines. Throw?
+			_stdout.write("%s: %s\r\n".format(header, value));
+		}
+		_stdout.write("\r\n");
+	}		
+	
+private: 
+	ushort id;
+	SocketHandler handler;
+	const Record beginRecord;
+	OutputStream _stdout;
+	OutputStream _stderr;
+	
+	ubyte[] _params_data;
+	string[string] _fcgi_params; // Parsed version of params.
+	string[string] _query_params; // parsed QUERY_STRING params.
+	string[][string] _query_params_multi; // same, with possible multiple values.
+	
+	this(int id, SocketHandler handler, const Record beginRecord) 
+	{
+		this.id = cast(ushort) id;
+		this.handler = handler;
+		this.beginRecord = beginRecord;
+		_stdout = new OutImpl(this.id, RecordType.FCGI_STDOUT, handler);
+		_stderr = new OutImpl(this.id, RecordType.FCGI_STDERR, handler);
+	}
+	
+	void handle(const Record record)
+	{
+		final switch(record.type)
+		{
+			case RecordType.FCGI_PARAMS:
+				if (!record.endOfStream) { _params_data ~= record.content; }
+				else { calcParams(); }
+				break;
+				
+			case RecordType.FCGI_STDIN:
+				// TODO: Send & cache stdin somewhere.
+				break;
+				
+			case RecordType.FCGI_END_REQUEST:
+			case RecordType.FCGI_ABORT_REQUEST:
+				// TODO: Move handling of closing to here.
+				break;
+				
+			case RecordType.FCGI_DATA:
+				// This might be used by other request roles in the future?
+			case RecordType.FCGI_BEGIN_REQUEST:
+			case RecordType.FCGI_STDOUT:
+			case RecordType.FCGI_STDERR:
+			case RecordType.FCGI_GET_VALUES:
+			case RecordType.FCGI_GET_VALUES_RESULT:
+			case RecordType.FCGI_UNKNOWN_TYPE:
+				
+				// TODO: These types shouldn't happen here.
+				// Send an error message to the server.
+				break; 
+		} 
+	}
+	
+	void calcParams()
+	{
+		import std.algorithm: findSplit;
+		import std.algorithm: splitter;
+		import std.uri: decodeComponent;
+		import std.string: empty;
+		
+		// Parse the FCGI parameters:
+		_fcgi_params = _params_data.fcgiParams;
+		handler.writeDebug(1, "Got params: %s".format(_fcgi_params));
+		
+		// Parse QUERY_STRING parameters in 2 ways:
+		// _query_params: key/value
+		// _query_params_multi: key/value[]
+		auto query = fcgiParams.get("QUERY_STRING", "");
+		
+		foreach(keyValue; query.splitter("&"))
+		{
+			auto split = keyValue.findSplit("=");
+			if (split[0].empty) continue;
+			auto key = split[0].decodeComponent;
+			auto value = split[2].decodeComponent;
+			_query_params[key] = value;
+			if (key in _query_params_multi) { _query_params_multi[key] ~= value; }
+			else { _query_params_multi[key] = [value]; }
+		}
+		
+	}
+	
+	/// Should we keep the socket open after this request? 
+	bool keepConnection() const
+	{
+		return beginRecord.beginRequestBody.keepConnection;
 	}
 }
 
